@@ -1,0 +1,15 @@
+mushroom_copper_spike.jpg:
+    CC BY-SA 2.5, Alberto Vasquez
+    https://en.wikipedia.org/wiki/File:Chroogomphus_rutilus_Bryonia_orig.jpg
+mushroom_deadly_webcap.jpg:
+    GFDL and CC BY-SA 3.0, Eric Steinert
+    https://commons.wikimedia.org/wiki/File:Cortinarius_rubellus_01.jpg
+mushroom_false_chanterelle.jpg:
+    CC BY-SA 3.0, Walt Sturgeon (Mykowalt)
+    https://commons.wikimedia.org/wiki/File:Hygrophoropsis_aurantiaca_241718.jpg
+mushroom_parasol_topview.jpg:
+    Pexels License, Denis Liendo
+    https://www.pexels.com/photo/top-view-of-a-parasol-mushroom-11354838/
+nya_svampboken_p226.jpg:
+    Copyright 2014, Pelle Holmberg and Hans Marklund
+    https://www.adlibris.com/se/bok/nya-svampboken-9789113066608

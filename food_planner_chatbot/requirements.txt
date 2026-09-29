@@ -1,0 +1,16 @@
+torch==2.14.0
+torchvision==0.29.0
+accelerate==1.14.0
+transformers==5.16.1
+ipykernel==7.3.0
+ipywidgets==8.1.9
+langchain==1.4.0
+langchain-huggingface==1.2.2
+langchain-google-genai==4.4.0
+langchain-text-splitters==1.1.2
+sentence-transformers==6.0.1
+pdfminer.six==20260107
+gradio==6.26.0
+pillow==12.3.0
+bitsandbytes==0.50.2
+google-genai==2.22.0
