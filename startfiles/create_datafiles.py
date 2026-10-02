@@ -13,6 +13,11 @@ import kagglehub
 #take out 500 random recipise from recipes_data_matric.csv
 
 import pandas as pd
+from google import genai
+import os
+import psycopg2
+from pgvector.psycopg2 import register_vector
+
 #df = pd.read_csv("C:\\Users\\danie\\VSCODE\\LLM_course\\1RT730_food_chatbot_LLMcourse\\startfiles\\data\\recipes_data_metric.csv")
 #df_sample = df.sample(n=500)
 #df_sample.to_csv("C:\\Users\\danie\\VSCODE\\LLM_course\\1RT730_food_chatbot_LLMcourse\\startfiles\\data\\first_500_recipes.csv", index=False)
@@ -20,7 +25,7 @@ import pandas as pd
 recepies = pd.read_csv("C:\\Users\\danie\\VSCODE\\LLM_course\\1RT730_food_chatbot_LLMcourse\\startfiles\\data\\first_500_recipes.csv")
 
 recepies["NER"] = recepies["NER"].apply(ast.literal_eval)
-from google import genai
+
 client = genai.Client()
 #for loop för att plocka ut NER, gör embedding och skicka in i vectordb
 recepies_NER = []
@@ -35,3 +40,20 @@ for i in range(0,len(recepies_NER),100):
         model="gemini-embedding-001",
         contents=batch)
     embeddings.extend(result.embeddings)
+
+
+conn = psycopg2.connect(
+    dbname="recipes",
+    user="food",
+    password="food",
+    host="db"
+)
+register_vector(conn)
+cur = conn.cursor()
+
+for i, text in enumerate(embeddings):
+    embedding = embeddings[i].values
+    cur.execute("") #fortsätt här
+
+
+
