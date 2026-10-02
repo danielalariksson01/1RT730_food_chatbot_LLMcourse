@@ -88,10 +88,10 @@ def chat(inputs, history, request: gr.Request):
                 host="db"
             )
             cur = conn.cursor()
-            cur.execute("SELECT title, ingredients FROM recipes WHERE ingredients LIKE %s LIMIT 5;", (f"%{ingredients[0]}%",))
+            cur.execute("SELECT title, ingredients FROM recipes ORDER BY embedding <=> %s LIMIT 5;", (embedded_vector,))
             relevant_recipes = cur.fetchall()
             scored_matches = []
-            for recipe_id, title, ingredients in relevant_recipes:
+            for title, ingredients in relevant_recipes:
                 score = 0
                 for ingredient in ingredients:
                     if ingredient in diet:
@@ -102,21 +102,23 @@ def chat(inputs, history, request: gr.Request):
             scored_matches.sort(reverse=True)
             
            #i denna delen ska vi sedan lägga in att den väljer utifrån produkter i svenska mataffärer
-            
-            
+            chosen_recipe = client.interactions.create(
+                model=default_model,
+                system_instruction="You are a recipe assistant. You will be given a list of recipes and you need to choose the best one based on the user's dietary restrictions and owned products. Return the chosen recipe in the following JSON format: {chosen_recipe: title, ingredients: [list of ingredients]}",
+                input=[{"type": "text", "text": f"Recipes: {scored_matches}, Diet: {diet}, Owned Products: {owned_products}"}],
+            )
+            recipes_chosen[key] = json.loads(chosen_recipe.output_text)
             
 
             #gör per recept och sedan lägg i en lista och sedan ta en annan modell som bara sammanställer detta, men vill egentligen ha en prompt per recept.
             #vad händer om alla recept man får innehåller saker som man är allergisk mot?
-        result = client.models.embed_content(
-                model="gemini-embedding-001",
-                contents=message_text)
         
+        #nu ska chatten summera allt
         interaction = client.interactions.create(
             model=default_model,
-            system_instruction="Use the JSON info to answer the question and if there is no question, summarize the information about the mushroom. Also add if the mushroom is poisonous, explain whether it could be safe to eat in any state or preperation and desribe the conditions under which it might be edible.", 
-                 input=[{"type": "text", "text": message_text},
-                     {"type": "text", "text": chats[request.session_hash]}],
+            system_instruction="You are a recipe assistant. Use the recipes and present it to the user in a clear and concise manner. If any of the recipes contain ingredients that the user is allergic to, do not include them in the final output. If the user has any owned products, prioritize recipes that use those products. Return the final output in a readable format.", 
+                 input=[{"type": "text", "text": f"User question: {text_from_input}"},
+                     {"type": "text", "text": f"Chosen recipes: {recipes_chosen}"}],
             stream=True
         )
         
