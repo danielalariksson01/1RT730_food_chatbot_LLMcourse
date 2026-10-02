@@ -6,7 +6,7 @@
 
 #emedings on the ingredients and quantities can be used to create a knowledge base for the chatbot to reference when answering questions about recipes.
 
-import kagglehub
+#import kagglehub
 
 # Download latest version
 
@@ -17,12 +17,13 @@ from google import genai
 import os
 import psycopg2
 from pgvector.psycopg2 import register_vector
+import ast
 
 #df = pd.read_csv("C:\\Users\\danie\\VSCODE\\LLM_course\\1RT730_food_chatbot_LLMcourse\\startfiles\\data\\recipes_data_metric.csv")
 #df_sample = df.sample(n=500)
 #df_sample.to_csv("C:\\Users\\danie\\VSCODE\\LLM_course\\1RT730_food_chatbot_LLMcourse\\startfiles\\data\\first_500_recipes.csv", index=False)
 
-recepies = pd.read_csv("C:\\Users\\danie\\VSCODE\\LLM_course\\1RT730_food_chatbot_LLMcourse\\startfiles\\data\\first_500_recipes.csv")
+recepies = pd.read_csv("/home/jovyan/work/data/first_500_recipes.csv").head(10)
 
 recepies["NER"] = recepies["NER"].apply(ast.literal_eval)
 
@@ -43,7 +44,7 @@ for i in range(0,len(recepies_NER),100):
 
 
 conn = psycopg2.connect(
-    dbname="recipes",
+    dbname="recepies",
     user="food",
     password="food",
     host="db"
@@ -51,9 +52,11 @@ conn = psycopg2.connect(
 register_vector(conn)
 cur = conn.cursor()
 
-for i, text in enumerate(embeddings):
+for i, recipe in enumerate(recepies.itertuples()):
     embedding = embeddings[i].values
-    cur.execute("") #fortsätt här
+    cur.execute("INSERT INTO recipes (title, ingredients, embedding) VALUES (%s, %s, %s)", (recipe.title, ", ".join(recipe.NER), embedding)) 
+    
+conn.commit()
 
 
 
