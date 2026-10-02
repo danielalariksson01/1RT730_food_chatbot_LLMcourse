@@ -1,3 +1,7 @@
+CREATE DATABASE recepies;
+
+\c recepies;
+
 CREATE EXTENSION IF NOT EXISTS vector;
 
 CREATE TABLE IF NOT EXISTS recipes(
