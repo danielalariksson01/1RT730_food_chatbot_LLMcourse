@@ -75,7 +75,7 @@ def chat(inputs, history, request: gr.Request):
         owned_products = [p.lower() for p in recipes.get("owned_products", [])]
         
         conn = psycopg2.connect(
-            dbname="recepies",
+            dbname="recipes",
             user="food",
             password="food",
             host="db"
@@ -84,6 +84,7 @@ def chat(inputs, history, request: gr.Request):
         cur = conn.cursor()
         
         recipes_chosen = {}
+        ingredients_chosen = {}
         for i, recipe in enumerate(recipes.get("recipies", [])):
             ingredients = recipe.get("ingredients", "")
             embedded_ingredients = client.models.embed_content(
@@ -107,14 +108,27 @@ def chat(inputs, history, request: gr.Request):
             scored_matches.sort(reverse=True)
             
            #i denna delen ska vi sedan lägga in att den väljer utifrån produkter i svenska mataffärer
+            ingredients_embeddings = []
+          
+            result = client.models.embed_content(
+                model="gemini-embedding-001",
+                contents=scored_matches[0][2]  # Use the ingredients of the top scored match
+            )
+            ingredients_embeddings.extend(result.embeddings)
+
+            embedded_vector = np.array(ingredients_embeddings[0].values)
+
+            cur.execute("SELECT product_name, quantity, allergens, embedding <=> %s AS distance FROM ingredients ORDER BY distance LIMIT 3;", (embedded_vector,))
+            relevant_ingredients = cur.fetchall()
+            
             chosen_recipe = client.interactions.create(
                 model=default_model,
-                system_instruction="You are a recipe assistant. You will be given a list of recipes and you need to choose the best one based on the user's dietary restrictions and owned products. Return the chosen recipe in the following JSON format: {'chosen_recipe': 'title', 'ingredients': ['ingredient1', 'ingredient2', 'ingredient3']}. If the user has any dietary restrictions, do not include any recipes that contain those ingredients. If the user has any owned products, prioritize recipes that use those products. Return only raw JSON and no markdown.",
-                input=[{"type": "text", "text": f"Recipes: {scored_matches}, Diet: {diet}, Owned Products: {owned_products}"}],
+                system_instruction="You are a recipe assistant. You will be given a recipe. Write the list of ingredients and their quantities by using staple wares and all the relevant ingredients. You can change the ingredients in the recipes to match staple wares between the recipes. Return the chosen recipe in the following JSON format: {'chosen_recipe': 'title', 'ingredients': ['ingredient1 + quantity', 'ingredient2 + quantity', 'ingredient3 + quantity']}. If the user has any dietary restrictions, do not include any recipes that contain those ingredients. If the user has any owned products, prioritize recipes that use those products. Return only raw JSON and no markdown.",
+                input=[{"type": "text", "text": f"Recipes: {scored_matches[0]}, Diet: {diet}, Owned Products: {owned_products}, Relevant Ingredients: {relevant_ingredients}"}],
+
             )
             recipes_chosen[i] = json.loads(chosen_recipe.output_text.strip())
-            
-
+           
             #gör per recept och sedan lägg i en lista och sedan ta en annan modell som bara sammanställer detta, men vill egentligen ha en prompt per recept.
             #vad händer om alla recept man får innehåller saker som man är allergisk mot?
         

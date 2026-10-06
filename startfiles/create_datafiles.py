@@ -23,6 +23,7 @@ import ast
 #df_sample = df.sample(n=500)
 #df_sample.to_csv("C:\\Users\\danie\\VSCODE\\LLM_course\\1RT730_food_chatbot_LLMcourse\\startfiles\\data\\first_500_recipes.csv", index=False)
 
+#------------ CREATE TABLE recipes (
 recipes = pd.read_csv("/home/jovyan/work/data/first_500_recipes.csv").head(10)
 
 recipes["NER"] = recipes["NER"].apply(ast.literal_eval)
@@ -57,6 +58,41 @@ for i, recipe in enumerate(recipes.itertuples()):
     cur.execute("INSERT INTO recipes (title, ingredients, embedding) VALUES (%s, %s, %s)", (recipe.title, ", ".join(recipe.NER), embedding)) 
     
 conn.commit()
+
+#----------CREATE TABLE Ingredients 
+
+product_names = pd.read_csv("/home/jovyan/work/data/openfoodfacts_subset_sweden.csv", usecols=["product_name", "quantity", "ingredients_text", "allergens"])
+
+#for loop för att plocka ut product_name kolumnen, gör embedding och skicka in i vectordb
+product_list = []
+for product in product_names.itertuples():
+    product_list.append(product.product_name)
+
+embeddings=[]
+#embedd in batches of 100
+for i in range(0,len(product_list),100):
+    batch = product_list[i:i+100]
+    result = client.models.embed_content(
+        model="gemini-embedding-001",
+        contents=batch)
+    embeddings.extend(result.embeddings)
+
+
+conn = psycopg2.connect(
+    dbname="recipes",
+    user="food",
+    password="food",
+    host="db"
+)
+register_vector(conn)
+cur = conn.cursor()
+
+for i, product in enumerate(product_names.itertuples()):
+    embedding = embeddings[i].values
+    cur.execute("INSERT INTO ingredients (product_name, quantity, ingredients_text, allergens, embedding) VALUES (%s, %s, %s, %s, %s)", (product.product_name, product.quantity, product.ingredients_text, product.allergens, embedding)) 
+    
+conn.commit()
+
 
 
 
