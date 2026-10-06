@@ -4,6 +4,8 @@ from google import genai
 from pathlib import Path
 import json
 import psycopg2
+from pgvector.psycopg2 import register_vector
+import numpy as np
 
 client = genai.Client()
 default_model = "gemini-3.8-flash"
@@ -57,46 +59,49 @@ def chat(inputs, history, request: gr.Request):
     #lägga till allergier
     #användaren måste på något sätt i prompten säga hur många recept man vill ha och annars använda standard mått. Men en LLM får prompten som input och sedan ska en annan skriva JSON, för att sedan göra embedding på dem orden, hitta recept och sedan ska en LLM bygga själva recepten men hjälp av produkterna.
     #punish recept som har något med deras allergi i och gör produkter som innehåller ingredienser som de redan har i sitt kök mer attraktiva.
-    if message:
+    if text_from_input:
         #gör embedding på message och sedan använd för att göra en vector sökning i databasen och hämta de 5 mest relevanta recepten. Använd sedan dessa recept som kontext i system_instruction.
         json_recipes = client.interactions.create(
             model=default_model,
-            system_instruction="You are a recipe assistant. You will be given instructions on what the person wants to eat and you need to structure the information in the following JSON format: {recipe 1: ingrediens, ...} where the ingrediens is a string with all ingrediens listed, if the user says 4 recipes but only provides what ingrediens they want the firs to contain, you have to decide key ingredient like chicken etc for the rest. If they do not provide a number of recipes, give them 7 recipes. If they provide any dietary restrictions you must put them in the JSON as diet. If they put any ingredients they want to use but not for a particular recipe, you must also put that in the JSON file as owned products.",
-            input=[{"type": "text", "text": message_text},
-                   {"type": "text", "text": chats[request.session_hash]}],
+            system_instruction="You are a recipe assistant. You will be given instructions on what the person wants to eat and you need to structure the information in the following JSON format: {'recipies': [{'ingredients': 'chicken, rice, garlic'}, {'ingredients': '...'}]} where the ingrediens is a string with all ingrediens listed, if the user says 4 recipes but only provides what ingrediens they want the firs to contain, you have to decide key ingredient like chicken etc for the rest. If they do not provide a number of recipes, give them 7 recipes. If they provide any dietary restrictions you must put them in the JSON as diet. If they put any ingredients they want to use but not for a particular recipe, you must also put that in the JSON file as owned products. Give only raw JSON and no markdown",
+            input=[{"type": "text", "text": message_text}],
         )
         
         #hitta ett recept för varje recipe som finns i json filen och gör embedding på dem och använd dessa embeddings för att göra en vector sökning i databasen och hämta de 5 mest relevanta recepten. Använd sedan dessa recept som kontext i system_instruction.
-        json_text = json_recipes.output_text
+        json_text = json_recipes.output_text.strip()
         recipes = json.loads(json_text)
+        
+        diet = [d.lower() for d in recipes.get("diet", [])] 
+        owned_products = [p.lower() for p in recipes.get("owned_products", [])]
+        
+        conn = psycopg2.connect(
+            dbname="recepies",
+            user="food",
+            password="food",
+            host="db"
+        )
+        register_vector(conn)
+        cur = conn.cursor()
+        
         recipes_chosen = {}
-        for key, value in recipes.items():
-            ingredients = value.get("ingredients", [])
-            diet = value.get("diet", "")
-            owned_products = value.get("owned_products", [])
+        for i, recipe in enumerate(recipes.get("recipies", [])):
+            ingredients = recipe.get("ingredients", "")
             embedded_ingredients = client.models.embed_content(
                 model="gemini-embedding-001",
                 contents=ingredients
             )
-            embedded_vector = embedded_ingredients.embeddings[0].values
+            embedded_vector = np.array(embedded_ingredients.embeddings[0].values)
             #gör embedding på ingredienserna och använd dessa embeddings för att göra en vector sökning i databasen och hämta de 5 mest relevanta recepten. Använd sedan dessa recept som kontext i system_instruction.
             #hämta de 5 mest relevanta recepten från databasen
-            conn= psycopg2.connect(
-                dbname="recipes",
-                user="food",
-                password="food",
-                host="db"
-            )
-            cur = conn.cursor()
             cur.execute("SELECT title, ingredients FROM recipes ORDER BY embedding <=> %s LIMIT 5;", (embedded_vector,))
             relevant_recipes = cur.fetchall()
             scored_matches = []
             for title, ingredients in relevant_recipes:
                 score = 0
-                for ingredient in ingredients:
-                    if ingredient in diet:
+                for ingredient in ingredients.lower().split(", "):
+                    if any(d in ingredient for d in diet):
                         score -= 1
-                    elif ingredient in owned_products:
+                    elif any(p in ingredient for p in owned_products):
                         score += 0.2
                 scored_matches.append((score, title, ingredients))
             scored_matches.sort(reverse=True)
@@ -104,14 +109,16 @@ def chat(inputs, history, request: gr.Request):
            #i denna delen ska vi sedan lägga in att den väljer utifrån produkter i svenska mataffärer
             chosen_recipe = client.interactions.create(
                 model=default_model,
-                system_instruction="You are a recipe assistant. You will be given a list of recipes and you need to choose the best one based on the user's dietary restrictions and owned products. Return the chosen recipe in the following JSON format: {chosen_recipe: title, ingredients: [list of ingredients]}",
+                system_instruction="You are a recipe assistant. You will be given a list of recipes and you need to choose the best one based on the user's dietary restrictions and owned products. Return the chosen recipe in the following JSON format: {'chosen_recipe': 'title', 'ingredients': ['ingredient1', 'ingredient2', 'ingredient3']}. If the user has any dietary restrictions, do not include any recipes that contain those ingredients. If the user has any owned products, prioritize recipes that use those products. Return only raw JSON and no markdown.",
                 input=[{"type": "text", "text": f"Recipes: {scored_matches}, Diet: {diet}, Owned Products: {owned_products}"}],
             )
-            recipes_chosen[key] = json.loads(chosen_recipe.output_text)
+            recipes_chosen[i] = json.loads(chosen_recipe.output_text.strip())
             
 
             #gör per recept och sedan lägg i en lista och sedan ta en annan modell som bara sammanställer detta, men vill egentligen ha en prompt per recept.
             #vad händer om alla recept man får innehåller saker som man är allergisk mot?
+        
+        conn.close()
         
         #nu ska chatten summera allt
         interaction = client.interactions.create(
