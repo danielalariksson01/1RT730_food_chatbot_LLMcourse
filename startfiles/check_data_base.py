@@ -1,7 +1,7 @@
 import psycopg2
 
 conn= psycopg2.connect(
-    dbname="recepies",
+    dbname="recipes",
     user="food",
     password="food",
     host="db"

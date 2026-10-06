@@ -23,20 +23,20 @@ import ast
 #df_sample = df.sample(n=500)
 #df_sample.to_csv("C:\\Users\\danie\\VSCODE\\LLM_course\\1RT730_food_chatbot_LLMcourse\\startfiles\\data\\first_500_recipes.csv", index=False)
 
-recepies = pd.read_csv("/home/jovyan/work/data/first_500_recipes.csv").head(10)
+recipes = pd.read_csv("/home/jovyan/work/data/first_500_recipes.csv").head(10)
 
-recepies["NER"] = recepies["NER"].apply(ast.literal_eval)
+recipes["NER"] = recipes["NER"].apply(ast.literal_eval)
 
 client = genai.Client()
 #for loop för att plocka ut NER, gör embedding och skicka in i vectordb
-recepies_NER = []
-for recepie in recepies.itertuples():
-    recepies_NER.append(recepie.title + ", ".join(recepie.NER))
+recipes_NER = []
+for recipe in recipes.itertuples():
+    recipes_NER.append(recipe.title + ", ".join(recipe.NER))
 
 embeddings=[]
 #embedd in batches of 100
-for i in range(0,len(recepies_NER),100):
-    batch = recepies_NER[i:i+100]
+for i in range(0,len(recipes_NER),100):
+    batch = recipes_NER[i:i+100]
     result = client.models.embed_content(
         model="gemini-embedding-001",
         contents=batch)
@@ -44,7 +44,7 @@ for i in range(0,len(recepies_NER),100):
 
 
 conn = psycopg2.connect(
-    dbname="recepies",
+    dbname="recipes",
     user="food",
     password="food",
     host="db"
@@ -52,7 +52,7 @@ conn = psycopg2.connect(
 register_vector(conn)
 cur = conn.cursor()
 
-for i, recipe in enumerate(recepies.itertuples()):
+for i, recipe in enumerate(recipes.itertuples()):
     embedding = embeddings[i].values
     cur.execute("INSERT INTO recipes (title, ingredients, embedding) VALUES (%s, %s, %s)", (recipe.title, ", ".join(recipe.NER), embedding)) 
     

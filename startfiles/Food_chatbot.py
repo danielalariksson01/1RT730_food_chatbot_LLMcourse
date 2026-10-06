@@ -82,7 +82,7 @@ def chat(inputs, history, request: gr.Request):
             #gör embedding på ingredienserna och använd dessa embeddings för att göra en vector sökning i databasen och hämta de 5 mest relevanta recepten. Använd sedan dessa recept som kontext i system_instruction.
             #hämta de 5 mest relevanta recepten från databasen
             conn= psycopg2.connect(
-                dbname="recepies",
+                dbname="recipes",
                 user="food",
                 password="food",
                 host="db"

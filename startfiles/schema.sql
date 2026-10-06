@@ -1,6 +1,6 @@
-CREATE DATABASE recepies;
+CREATE DATABASE recipes;
 
-\c recepies;
+\c recipes;
 
 CREATE EXTENSION IF NOT EXISTS vector;
 
