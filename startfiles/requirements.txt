@@ -14,3 +14,5 @@ gradio==6.26.0
 pillow==12.3.0
 bitsandbytes==0.50.2
 google-genai==2.22.0
+psycopg2-binary
+pgvector
