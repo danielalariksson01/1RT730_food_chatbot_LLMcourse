@@ -49,7 +49,7 @@ def embed_batch(batch, max_retries=5):
 #for loop för att plocka ut NER, gör embedding och skicka in i vectordb
 recipes_NER = []
 for recipe in recipes.itertuples():
-    recipes_NER.append(recipe.title + ", ".join(recipe.NER))
+    recipes_NER.append(recipe.title + ": " + ", ".join(recipe.NER))
 
 embeddings=[]
 #embedd in batches of 100
