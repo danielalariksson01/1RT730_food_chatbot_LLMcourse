@@ -9,4 +9,12 @@ CREATE TABLE IF NOT EXISTS recipes(
     title TEXT NOT NULL,
     ingredients TEXT,
     embedding VECTOR(3072)
-)
+);
+
+CREATE TABLE IF NOT EXISTS ingredients(
+    product_name TEXT NOT NULL,
+    quantity TEXT,
+    ingredients_text TEXT,
+    allergens TEXT,
+    embedding VECTOR(3072)
+);
