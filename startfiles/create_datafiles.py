@@ -29,6 +29,7 @@ from google.genai import errors
 recipes = pd.read_csv("/home/jovyan/work/data/first_500_recipes.csv")
 
 recipes["NER"] = recipes["NER"].apply(ast.literal_eval)
+recipes["ingredients"] = recipes["ingredients"].apply(ast.literal_eval)
 
 client = genai.Client()
 
@@ -69,7 +70,7 @@ cur = conn.cursor()
 
 for i, recipe in enumerate(recipes.itertuples()):
     embedding = embeddings[i].values
-    cur.execute("INSERT INTO recipes (title, ingredients, embedding) VALUES (%s, %s, %s)", (recipe.title, ", ".join(recipe.NER), embedding)) 
+    cur.execute("INSERT INTO recipes (title, ingredients, ingredient_amounts, embedding) VALUES (%s, %s, %s, %s)", (recipe.title, ", ".join(recipe.NER), recipe.ingredients, embedding))
     
 conn.commit()
 
