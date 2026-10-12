@@ -260,6 +260,8 @@ Write in the same language as the user's message, and keep store product names e
                     yield full_response
 
 
-demo  = gr.ChatInterface(fn=chat, multimodal=True)
+start_message = "Hi, I will help you plan your recipies and minimize the food waste. Tell me what kind of recipies you want, how many you are, how many recipies in total and if there is something you want to use from home and how much you have."
+demo  = gr.ChatInterface(fn=chat, multimodal=True, chatbot=gr.Chatbot(value=[{"role":"assistant", "content":start_message}]))
 
-demo.launch()
+theme = gr.themes.Soft(primary_hue="orange", secondary_hue="blue", neutral_hue="slate")
+demo.launch(theme=theme)
