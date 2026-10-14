@@ -17,6 +17,8 @@ chats = defaultdict(lambda: None)
 #Problem:
 #Alla recept har inte ingredienser och allergier, exempelvis om någon skriver gluten
 #Hur vet jag hur bra den gissar mängden om databasen inte har det
+#lägg till distance för recepten
+#skicka in alla recept i närheten så att den har mer att jobba med
 
 def embed(text):
     result = client.models.embed_content(
@@ -68,7 +70,7 @@ def chat(inputs, history, request: gr.Request):
             cur = conn.cursor()
             json_user_asks = client.interactions.create(
                 model=default_model,
-                system_instruction="""You are the first step in a meal-planning chatbot whose goal is to reduce household food waste. Your output is parsed by code with json.loads. Translate everything the user said to english.
+                system_instruction="""You are the first step in a meal-planning chatbot whose goal is to reduce household food waste. Your output is parsed by code with json.loads. Translate everything the user said to swedish.
 
 The input is the conversation as "role: content" lines. The first line is the user's newest message, and the lines after it are earlier turns. Plan for the newest message, and use the earlier turns for things that still apply, for example when the user answers a question about how many people are eating or how many recipes they want, or mentioned an allergy before.
 
@@ -91,7 +93,6 @@ Return only a JSON object with double-quoted keys and strings, and no markdown, 
             text = json_user_asks.output_text.strip()
             user_asks = json.loads(text)
 
-            #ändra wanted recipies så att de används direkt
             wanted_recipies = [r.lower() for r in user_asks.get("specific_recipies") or []]
             diet = [d.lower() for d in user_asks.get("diet") or []]
             owned_products = [p for p in user_asks.get("owned_products") or [] if p.get("product_name")]
@@ -138,7 +139,7 @@ For each ingredient, give the package size it is sold in and how much of it the 
 If there is not a specific wanted recipe, put null instead of the recipe name that the user provided.
 
 Return only a JSON object with double-quoted keys and strings, and no markdown, code fences or other text:
-{"recipes": [{"wanted_recipe: "lasagne", ingredients": [{"name": "chicken breast", "package_size": "900 g", "amount_used": "450 g"}, {"name": "rice", "package_size": "1 kg", "amount_used": "300 g"}]}, {"wanted_recipe": null, "ingredients": [{"name": "chicken breast", "package_size": "900 g", "amount_used": "450 g"} {"name": "rice", "package_size": "1 kg", "amount_used": "300 g"}]}]}""",
+{"recipes": [{"wanted_recipe: "lasagne", "ingredients": [{"name": "chicken breast", "package_size": "900 g", "amount_used": "450 g"}, {"name": "rice", "package_size": "1 kg", "amount_used": "300 g"}]}, {"wanted_recipe": null, "ingredients": [{"name": "chicken breast", "package_size": "900 g", "amount_used": "450 g"} {"name": "rice", "package_size": "1 kg", "amount_used": "300 g"}]}]}""",
                 input=[{"type": "text", "text": f"Diet: {diet}, Household products: {owned_products}, Wanted ingredients: {checked_ingredients}, Additional ingredients: {checked_other_ingredients}, Wanted recipes: {wanted_recipies}, Number of people: {number_of_people}, Number of recipes: {number_of_recipes}"}],
             )
 
@@ -149,11 +150,14 @@ Return only a JSON object with double-quoted keys and strings, and no markdown, 
 
             for i, recipe in enumerate(recipes.get("recipes") or []):
                 planned_ingredients = recipe.get("ingredients") or []
-                #ändra så att wanted recipe också är med
+                specific_recipe = recipe.get("wanted_recipe")
                 ingredient_names = ", ".join(ingredient.get("name", "") for ingredient in planned_ingredients)
                 if not ingredient_names:
                     continue
-                cur.execute("SELECT title, ingredients, ingredient_amounts FROM recipes ORDER BY embedding <=> %s LIMIT 5;", (embed(ingredient_names),))
+                if specific_recipe:
+                    cur.execute("SELECT title, ingredients, ingredient_amounts FROM recipes ORDER BY embedding <=> %s LIMIT 5;", (embed(specific_recipe),))
+                else:
+                    cur.execute("SELECT title, ingredients, ingredient_amounts FROM recipes ORDER BY embedding <=> %s LIMIT 5;", (embed(ingredient_names),))
                 relevant_recipes = cur.fetchall()
                 scored_matches = []
                 #ta bort scored matches och skicka hellre in alla recept
