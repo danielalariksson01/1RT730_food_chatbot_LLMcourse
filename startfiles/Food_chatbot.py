@@ -1,7 +1,6 @@
 import gradio as gr
 from collections import defaultdict
 from google import genai
-from pathlib import Path
 import json
 import psycopg2
 from pgvector.psycopg2 import register_vector
@@ -15,26 +14,9 @@ if "demo" in locals() and demo.is_running:
 
 chats = defaultdict(lambda: None)
 
-
-def parse_json(text):
-    text = text.strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1].rsplit("```", 1)[0]
-    return json.loads(text)
-
-def content_to_text(content):
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return " ".join(part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text")
-    return ""
-
-def parse_count(value):
-    try:
-        count = int(value)
-    except (TypeError, ValueError):
-        return None
-    return count if count > 0 else None
+#Problem:
+#Alla recept har inte ingredienser och allergier, exempelvis om någon skriver gluten
+#Hur vet jag hur bra den gissar mängden om databasen inte har det
 
 def embed(text):
     result = client.models.embed_content(
@@ -44,13 +26,11 @@ def embed(text):
     return np.array(result.embeddings[0].values)
 
 def search_products(cur, product):
-    relevant_products = find_close_products(cur, product, 10)
+    embedded_vector = embed(product)
+    cur.execute("SELECT product_name, quantity, allergens, embedding <=> %s AS distance FROM ingredients WHERE embedding <=> %s < %s ORDER BY distance LIMIT %s;", (embedded_vector, embedded_vector, 0.3, 10))
+    relevant_products= cur.fetchall()
     return [p for p in relevant_products if p[1] is not None] or None
 
-def find_close_products(cur, text, limit):
-    embedded_vector = embed(text)
-    cur.execute("SELECT product_name, quantity, allergens, embedding <=> %s AS distance FROM ingredients WHERE embedding <=> %s < %s ORDER BY distance LIMIT %s;", (embedded_vector, embedded_vector, 0.3, limit))
-    return cur.fetchall()
 
 def find_products_per_ingredient(cur, ingredients, limit):
     result = client.models.embed_content(
@@ -68,9 +48,13 @@ def chat(inputs, history, request: gr.Request):
 
     text_from_input = inputs.get('text')
 
+    if text_from_input.strip() == "":
+        yield "This is a recipe food assistant chatbot"
+        return
+    
     message = [{"role": "user", "content": text_from_input}] + (history or [])
 
-    message_text = "\n".join(f"{m['role']}: {content_to_text(m.get('content'))}" for m in message if content_to_text(m.get("content")))
+    message_text = "\n".join(f"{m['role']}: {m['content']}" for m in message if isinstance(m.get("content"), str))
 
     if text_from_input:
         conn = psycopg2.connect(
@@ -84,7 +68,7 @@ def chat(inputs, history, request: gr.Request):
             cur = conn.cursor()
             json_user_asks = client.interactions.create(
                 model=default_model,
-                system_instruction="""You are the first step in a meal-planning chatbot whose goal is to reduce household food waste. Your output is parsed by code with json.loads, so the user never sees it.
+                system_instruction="""You are the first step in a meal-planning chatbot whose goal is to reduce household food waste. Your output is parsed by code with json.loads. Translate everything the user said to english.
 
 The input is the conversation as "role: content" lines. The first line is the user's newest message, and the lines after it are earlier turns. Plan for the newest message, and use the earlier turns for things that still apply, for example when the user answers a question about how many people are eating or how many recipes they want, or mentioned an allergy before.
 
@@ -104,14 +88,20 @@ Return only a JSON object with double-quoted keys and strings, and no markdown, 
                 input=[{"type": "text", "text": message_text}],
             )
 
-            user_asks = parse_json(json_user_asks.output_text)
+            text = json_user_asks.output_text.strip()
+            user_asks = json.loads(text)
 
+            #ändra wanted recipies så att de används direkt
             wanted_recipies = [r.lower() for r in user_asks.get("specific_recipies") or []]
             diet = [d.lower() for d in user_asks.get("diet") or []]
             owned_products = [p for p in user_asks.get("owned_products") or [] if p.get("product_name")]
             owned_names = [p["product_name"].lower() for p in owned_products]
-            number_of_people = parse_count(user_asks.get("number_of_people"))
-            number_of_recipes = parse_count(user_asks.get("number_of_recipes"))
+            number_of_people = user_asks.get("number_of_people")
+            number_of_recipes = user_asks.get("number_of_recipes")
+            if not isinstance(number_of_people, int) or number_of_people <1:
+                number_of_people=None
+            if not isinstance(number_of_recipes, int) or number_of_recipes<1:
+                number_of_recipes=None
 
             missing = []
             if number_of_people is None:
@@ -145,23 +135,28 @@ Plan exactly the given number of recipes. Each recipe has exactly one protein so
 
 For each ingredient, give the package size it is sold in and how much of it the recipe uses for the given number of people. If one recipe does not use the whole package, use the rest in another recipe, so that nothing is wasted.
 
+If there is not a specific wanted recipe, put null instead of the recipe name that the user provided.
+
 Return only a JSON object with double-quoted keys and strings, and no markdown, code fences or other text:
-{"recipes": [{"ingredients": [{"name": "chicken breast", "package_size": "900 g", "amount_used": "450 g"}, {"name": "rice", "package_size": "1 kg", "amount_used": "300 g"}]}]}""",
+{"recipes": [{"wanted_recipe: "lasagne", ingredients": [{"name": "chicken breast", "package_size": "900 g", "amount_used": "450 g"}, {"name": "rice", "package_size": "1 kg", "amount_used": "300 g"}]}, {"wanted_recipe": null, "ingredients": [{"name": "chicken breast", "package_size": "900 g", "amount_used": "450 g"} {"name": "rice", "package_size": "1 kg", "amount_used": "300 g"}]}]}""",
                 input=[{"type": "text", "text": f"Diet: {diet}, Household products: {owned_products}, Wanted ingredients: {checked_ingredients}, Additional ingredients: {checked_other_ingredients}, Wanted recipes: {wanted_recipies}, Number of people: {number_of_people}, Number of recipes: {number_of_recipes}"}],
             )
 
-            recipes = parse_json(json_recipies.output_text)
-
+            recipes_text = json_recipies.output_text
+            recipes = json.loads(recipes_text)
+            
             recipes_chosen = {}
 
             for i, recipe in enumerate(recipes.get("recipes") or []):
                 planned_ingredients = recipe.get("ingredients") or []
+                #ändra så att wanted recipe också är med
                 ingredient_names = ", ".join(ingredient.get("name", "") for ingredient in planned_ingredients)
                 if not ingredient_names:
                     continue
                 cur.execute("SELECT title, ingredients, ingredient_amounts FROM recipes ORDER BY embedding <=> %s LIMIT 5;", (embed(ingredient_names),))
                 relevant_recipes = cur.fetchall()
                 scored_matches = []
+                #ta bort scored matches och skicka hellre in alla recept
                 for title, ingredients, ingredient_amounts in relevant_recipes:
                     score = 0
                     for ingredient in ingredients.lower().split(", "):
@@ -176,7 +171,8 @@ Return only a JSON object with double-quoted keys and strings, and no markdown, 
 
                 recipe_ingredients = best_match[2].split(", ") if best_match else [ingredient.get("name", "") for ingredient in planned_ingredients]
                 relevant_ingredients = find_products_per_ingredient(cur, [ingredient for ingredient in recipe_ingredients if ingredient], 3)
-
+                
+                #se till att inte samma recept kan användas flera gånger
                 chosen_recipe = client.interactions.create(
                     model=default_model,
                     system_instruction="""You are one step in a meal-planning pipeline whose goal is to reduce household food waste. An earlier step has already planned the protein source and carbohydrate source of this recipe, with quantities. Your job is to adapt a recipe from the database into a complete recipe with an ingredient list with quantities. Your output is parsed by code with json.loads and then passed to another model that writes the final answer, so the user never sees your output directly.
@@ -215,7 +211,8 @@ Each ingredient is one string with the quantity first, for example "400 g crushe
                     input=[{"type": "text", "text": f"Planned ingredients: {planned_ingredients}, Recipe from database: {database_recipe}, Diet: {diet}, Owned Products: {owned_products}, Relevant Ingredients: {relevant_ingredients}, Number of people: {number_of_people}"}],
 
                 )
-                recipes_chosen[i] = parse_json(chosen_recipe.output_text)
+                recipes_chosen_text = chosen_recipe.output_text
+                recipes_chosen[i] = json.loads(recipes_chosen_text)
 
         finally:
             conn.close()
