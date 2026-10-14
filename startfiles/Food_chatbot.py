@@ -17,7 +17,6 @@ chats = defaultdict(lambda: None)
 #Problem:
 #Alla recept har inte ingredienser och allergier, exempelvis om någon skriver gluten
 #Hur vet jag hur bra den gissar mängden om databasen inte har det
-#lägg till distance för recepten
 #skicka in alla recept i närheten så att den har mer att jobba med
 
 def embed(text):
@@ -155,9 +154,9 @@ Return only a JSON object with double-quoted keys and strings, and no markdown, 
                 if not ingredient_names:
                     continue
                 if specific_recipe:
-                    cur.execute("SELECT title, ingredients, ingredient_amounts FROM recipes ORDER BY embedding <=> %s LIMIT 5;", (embed(specific_recipe),))
+                    cur.execute("SELECT title, ingredients, ingredient_amounts, embedding <=> %s AS distance FROM recipes WHERE embedding <=> %s < %s ORDER BY distance LIMIT 5;", (embed(specific_recipe),))
                 else:
-                    cur.execute("SELECT title, ingredients, ingredient_amounts FROM recipes ORDER BY embedding <=> %s LIMIT 5;", (embed(ingredient_names),))
+                    cur.execute("SELECT title, ingredients, ingredient_amounts, embedding <=> %s AS distance FROM recipes WHERE embedding <=> %s < %s ORDER BY distance LIMIT 5;", (embed(ingredient_names),))
                 relevant_recipes = cur.fetchall()
                 scored_matches = []
                 #ta bort scored matches och skicka hellre in alla recept
