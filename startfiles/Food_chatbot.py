@@ -14,10 +14,6 @@ if "demo" in locals() and demo.is_running:
 
 chats = defaultdict(lambda: None)
 
-#Problem:
-#Alla recept har inte ingredienser och allergier, exempelvis om någon skriver gluten
-#Hur vet jag hur bra den gissar mängden om databasen inte har det
-
 def embed(text):
     result = client.models.embed_content(
         model="gemini-embedding-001",
@@ -52,19 +48,45 @@ def parse_json(text):
         text = text.split("\n", 1)[-1].rsplit("```", 1)[0]
     return json.loads(text)
 
-def chat(inputs, history, request: gr.Request):
+def stream_text(interaction):
+    full_response = ""
+    for event in interaction:
+        if event.event_type == "step.delta":
+            if event.delta.type == "text":
+                full_response += event.delta.text
+                yield full_response
 
-    text_from_input = inputs.get('text')
-    if text_from_input is None:
-        yield "This is a recipe food assistant chatbot"
-        return
-    if text_from_input.strip() == "":
-        yield "This is a recipe food assistant chatbot"
-        return
-    
-    message = [{"role": "user", "content": text_from_input}] + (history or [])
+def content_text(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, dict):
+        content = [content]
+    if isinstance(content, (list, tuple)):
+        return " ".join(c.get("text", "") for c in content if isinstance(c, dict) and c.get("text"))
+    return ""
 
-    message_text = "\n".join(f"{m['role']}: {m['content']}" for m in message if isinstance(m.get("content"), str))
+def positive_int(value):
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        return None
+    return value if value >= 1 else None
+
+def recent_recipe_titles(history, number_of_messages=6):
+    titles = set()
+    for m in (history or [])[-number_of_messages:]:
+        if m.get("role") != "assistant":
+            continue
+        for line in content_text(m.get("content")).splitlines():
+            if line.lstrip().startswith("#"):
+                title = line.strip().lstrip("#").strip().strip("*").strip().lower()
+                if title:
+                    titles.add(title)
+    return titles
+
+def meal_plan_pipeline(text_from_input, history, message_text, session):
+
+    chats[session] = None
 
     if text_from_input:
         conn = psycopg2.connect(
@@ -78,23 +100,24 @@ def chat(inputs, history, request: gr.Request):
             cur = conn.cursor()
             json_user_asks = client.interactions.create(
                 model=default_model,
-                system_instruction="""You are the first step in a meal-planning chatbot whose goal is to reduce household food waste. Your output is parsed by code with json.loads. Translate everything the user said to swedish.
+                system_instruction="""You are the first step in a meal-planning chatbot whose goal is to reduce household food waste. Your output is parsed by code with json.loads. Write the values of specific_recipies, ingredients, other_ingredients, diet and owned_products in Swedish, whatever language the user writes in, since they are matched against Swedish grocery products.
 
 The input is the conversation as "role: content" lines. The first line is the user's newest message, and the lines after it are earlier turns. Plan for the newest message, and use the earlier turns for things that still apply, for example when the user answers a question about how many people are eating or how many recipes they want, or mentioned an allergy before.
 
 Identify the following from the conversation:
 - specific_recipies: complete meals the user asks for, for example "lasagne". May be empty.
 - ingredients: ingredients the user wants in their meals. If the user asks for a complete meal, add its main ingredients here, for example minced beef and pasta for lasagne.
-- other_ingredients: protein sources and carbohydrate sources that are not already in ingredients, so that the meal plan becomes a balanced diet. Suggest several different ones (for example chicken, lentils, salmon, potatoes, rice, bulgur) so that there is variety between the recipes, and never suggest anything that conflicts with the user's diet.
+- other_ingredients: protein sources and carbohydrate sources that are not already in ingredients, so that the meal plan becomes a balanced diet. Suggest several different ones (for example chicken, lentils, salmon, potatoes, rice, bulgur), at least as many protein sources and as many carbohydrate sources as the number of recipes, so that every recipe can be a different dish, and never suggest anything that conflicts with the user's diet.
 - diet: the user's dietary restrictions and allergies.
 - owned_products: food the user already has at home, with the quantity if the user mentions it.
 - number_of_people: how many people are eating.
 - number_of_recipes: how many recipes the user wants.
+- language: the language the user writes in, in English, for example "English" or "Swedish". Judge it from the user's own messages, not from this instruction, and use earlier user messages when the newest one is too short to tell.
 
 Use an empty list when the user mentions no specific recipes, ingredients, dietary restrictions or owned products. Use null for number_of_people, number_of_recipes or a quantity that the user does not mention.
 
 Return only a JSON object with double-quoted keys and strings, and no markdown, code fences or other text. Example:
-{"specific_recipies": ["lasagne"], "ingredients": ["minced beef", "pasta"], "other_ingredients": ["chicken", "lentils", "potatoes", "rice"], "diet": ["lactose"], "owned_products": [{"product_name": "carrots", "quantity": "500 g"}], "number_of_people": 2, "number_of_recipes": 3}""",
+{"specific_recipies": ["lasagne"], "ingredients": ["minced beef", "pasta"], "other_ingredients": ["chicken", "lentils", "potatoes", "rice"], "diet": ["lactose"], "owned_products": [{"product_name": "carrots", "quantity": "500 g"}], "number_of_people": 2, "number_of_recipes": 3, "language": "English"}""",
                 input=[{"type": "text", "text": message_text}],
             )
 
@@ -104,12 +127,9 @@ Return only a JSON object with double-quoted keys and strings, and no markdown, 
             diet = [d.lower() for d in user_asks.get("diet") or [] if isinstance(d, str)]
             owned_products = [{"product_name": p, "quantity": None} if isinstance(p, str) else p for p in user_asks.get("owned_products") or []]
             owned_products = [p for p in owned_products if isinstance(p, dict) and p.get("product_name")]
-            number_of_people = user_asks.get("number_of_people")
-            number_of_recipes = user_asks.get("number_of_recipes")
-            if not isinstance(number_of_people, int) or number_of_people <1:
-                number_of_people=None
-            if not isinstance(number_of_recipes, int) or number_of_recipes<1:
-                number_of_recipes=None
+            number_of_people = positive_int(user_asks.get("number_of_people"))
+            number_of_recipes = positive_int(user_asks.get("number_of_recipes"))
+            language = user_asks.get("language") if isinstance(user_asks.get("language"), str) else "the same language as the user's message"
 
             missing = []
             if number_of_people is None:
@@ -119,9 +139,10 @@ Return only a JSON object with double-quoted keys and strings, and no markdown, 
             if missing:
                 question = client.interactions.create(
                     model=default_model,
-                    system_instruction="You are a meal-planning chatbot. Before you can plan the meals, you need to know the things listed in the input. Ask the user for them in one short, friendly question, in the same language as the user's message. Write only the question.",
-                    input=[{"type": "text", "text": f"User message: {text_from_input}, Missing: {missing}"}],
+                    system_instruction="You are a meal-planning chatbot. Before you can plan the meals, you need to know the things listed in the input. Ask the user for them in one short, friendly question, in the language given in the input. Write only the question.",
+                    input=[{"type": "text", "text": f"User message: {text_from_input}, Missing: {missing}, Language: {language}"}],
                 )
+                chats[session] = "awaiting_details"
                 yield question.output_text
                 return
 
@@ -139,7 +160,7 @@ The input contains:
 - Wanted recipes: complete meals the user asked for. May be empty.
 - Number of people and number of recipes.
 
-Plan exactly the given number of recipes. Each recipe has exactly one protein source and one carbohydrate source. The exception is a wanted recipe: build one recipe for each wanted recipe, and include its main ingredients even if they are not protein or carbohydrates. Prefer the wanted ingredients, and use the additional ingredients to make the plan a balanced diet, for example so that not every recipe uses the same protein. Never use an ingredient that violates the diet, and check the allergens of the store products.
+Plan exactly the given number of recipes. Each recipe has exactly one protein source and one carbohydrate source. The exception is a wanted recipe: build one recipe for each wanted recipe, and include its main ingredients even if they are not protein or carbohydrates. Prefer the wanted ingredients, and use the additional ingredients to make the plan a balanced diet. Every recipe must be a different dish: never plan two recipes with the same protein source and carbohydrate source, and use a different protein source in every recipe unless the diet leaves fewer allowed protein sources than recipes. Never use an ingredient that violates the diet, and check the allergens of the store products.
 
 For each ingredient, give the package size it is sold in and how much of it the recipe uses for the given number of people. If one recipe does not use the whole package, use the rest in another recipe, so that nothing is wasted.
 
@@ -155,6 +176,8 @@ Return only a JSON object with double-quoted keys and strings, and no markdown, 
                 recipes = {"recipes": recipes}
 
             planned_recipes = []
+            recent_titles = recent_recipe_titles(history)
+            excluded_titles = set(recent_titles)
 
             for recipe in recipes.get("recipes") or []:
                 if not isinstance(recipe, dict):
@@ -166,11 +189,11 @@ Return only a JSON object with double-quoted keys and strings, and no markdown, 
                     continue
                 if specific_recipe:
                     embedding = embed(f"{specific_recipe}: {ingredient_names}")
-                    cur.execute("SELECT title, ingredients, ingredient_amounts, embedding <=> %s AS distance FROM recipes WHERE embedding <=> %s < %s ORDER BY distance LIMIT 3;", (embedding, embedding, 0.35))
                 else:
                     embedding = embed(ingredient_names)
-                    cur.execute("SELECT title, ingredients, ingredient_amounts, embedding <=> %s AS distance FROM recipes WHERE embedding <=> %s < %s ORDER BY distance LIMIT 3;", (embedding, embedding, 0.35))
+                cur.execute("SELECT title, ingredients, ingredient_amounts, embedding <=> %s AS distance FROM recipes WHERE embedding <=> %s < %s AND NOT (lower(title) = ANY(%s::text[])) ORDER BY distance LIMIT 3;", (embedding, embedding, 0.35, list(excluded_titles)))
                 relevant_recipes = cur.fetchall()
+                excluded_titles.update(title.lower() for title, *_ in relevant_recipes)
                 
                 recipies_with_ingredients = []
                 for title, ingredients, ingredient_amounts, distance in relevant_recipes:
@@ -210,6 +233,8 @@ The input contains these parts:
   - planned_ingredients: the ingredients this recipe must contain, each with the package size and the amount the recipe uses (amount_used). Keep these ingredients and amounts as they are, since they were planned so that whole packages get used across the recipes.
   - candidate_recipes: up to five similar recipes from the database, closest first. Each has a title, a distance (lower means more similar to the planned ingredients), an ingredient list, usually with the quantities from the original recipe, for example "450 g uncooked medium shrimp, peeled and deveined", and store_products, where each ingredient of that recipe maps to up to three products from Swedish grocery stores, each as (product name, package size, allergens, distance), or to None when no product was found. The store products come from an automatic similarity search, so some of them may not really be that ingredient. May be None when no recipe was similar enough.
   - relevant_ingredients: only given when there are no candidate recipes. Each planned ingredient maps to store products in the same format as store_products. Otherwise None.
+- Recently suggested recipes: titles already given to the user earlier in the chat. Never suggest these again, also not when you write a recipe without a database recipe.
+- Reply language: the language the whole reply must be written in.
 
 Choosing the recipes: for each planned recipe, go through every candidate recipe and choose the one that fits best. First rule out every candidate where an ingredient that is central to the dish violates the diet, so that it cannot simply be replaced or left out, and every candidate you have already chosen for another planned recipe, so that no recipe appears twice in the plan. Among the rest, prefer the one that fits the planned ingredients and the wanted recipe, and that can use the most pantry products, and use the distance to break ties. If every candidate is ruled out, treat it as if there were no database recipe.
 
@@ -228,32 +253,97 @@ Store products: for each ingredient, look at its products in store_products of t
 Staples: where it does not change the dish, choose common staples (yellow onion, garlic, crushed tomatoes, rice, pasta, cooking oil, milk, eggs) over specialty variants, so that the recipes share purchases.
 
 Present the recipes as a meal plan, in the order of the planned recipes. For each recipe, write:
-- the title of the chosen database recipe as a heading, exactly as it is, without translating or rewording it, even when you have adjusted the recipe, so that the user can find the original recipe. Only when there is no database recipe, write a short title that describes the dish.
+- the title of the chosen database recipe as a markdown heading (### Title) with nothing else on that line, exactly as it is, without translating or rewording it, even when you have adjusted the recipe, so that the user can find the original recipe. Only when there is no database recipe, write a short title that describes the dish.
 - directly under the heading, when you changed anything apart from scaling to the number of people: a short paragraph that starts with "Adjusted:" (in the user's language) and says what was changed from the original recipe and why, for example ingredients replaced because of the diet, replaced by planned ingredients, or pantry products you added.
 - the ingredients as a bullet list, each with the quantity first, for example "400 g crushed tomatoes", "2 tbsp olive oil", "1 yellow onion".
 - a short description of how to cook it, in three to five sentences. The data has no cooking instructions, so write these from how the dish is normally made, using only the listed ingredients.
 
 After the recipes, write one combined shopping list for the whole plan. Add up ingredients that appear in several recipes into a single line, and leave out everything in the pantry. If the pantry is not empty, add a line saying which recipes use each pantry product.
 
-Write in the same language as the user's message, and keep store product names exactly as they are given. Start directly with the plan, without describing how the recipes were chosen, and keep the text around the lists brief.""",
+Write the whole reply in the reply language, including headings like "Adjusted:" and the shopping list, even though most of the input data is in Swedish or English. Keep store product names and database recipe titles exactly as they are given. Start directly with the plan, without describing how the recipes were chosen, and keep the text around the lists brief.""",
             input=[{"type": "text", "text": f"User question: {text_from_input}"},
                    {"type": "text", "text": f"Diet: {diet}"},
                    {"type": "text", "text": f"Pantry: {owned_products}"},
                    {"type": "text", "text": f"Number of people: {number_of_people}"},
-                   {"type": "text", "text": f"Planned recipes: {planned_recipes}"}],
+                   {"type": "text", "text": f"Planned recipes: {planned_recipes}"},
+                   {"type": "text", "text": f"Recently suggested recipes: {sorted(recent_titles)}"},
+                   {"type": "text", "text": f"Reply language: {language}"}],
             stream=True
         )
 
-        full_response=""
-        for event in interaction:
-            if event.event_type=="step.delta":
-                if event.delta.type == "text":
-                    full_response += event.delta.text
-                    yield full_response
+        yield from stream_text(interaction)
 
 
-start_message = "Hi, I will help you plan your recipies and minimize the food waste. Tell me what kind of recipies you want, how many you are, how many recipies in total and if there is something you want to use from home and how much you have."
-demo  = gr.ChatInterface(fn=chat, multimodal=True, chatbot=gr.Chatbot(value=[{"role":"assistant", "content":start_message}]))
+def route_message(message_text, awaiting_details):
+    try:
+        json_route = client.interactions.create(
+            model=default_model,
+            system_instruction="""You route the messages of a meal-planning chatbot whose goal is to reduce household food waste. Your output is parsed by code with json.loads.
+
+The input is the conversation as "role: content" lines. The first line is the user's newest message, and the lines after it are earlier turns. The input also says whether the chatbot is waiting for the user to say how many people are eating and how many recipes they want.
+
+Choose "meal_plan" when the newest message asks for new recipes, a meal plan, dinner ideas, or more or other recipes than the ones already given, or when the chatbot is waiting for the number of people and recipes and the user gives them, for example "2 people, 3 recipes" or just "4".
+
+Choose "chat" for everything else: questions about recipes already given in the chat, cooking techniques, substitutions, nutrition, storage, leftovers, changes to a recipe already given (for example "make recipe 2 vegetarian"), small talk and questions that are not about food. Also choose "chat" when the chatbot is waiting for details but the user asks something else instead.
+
+Return only a JSON object with double-quoted keys and strings, and no markdown, code fences or other text: {"mode": "meal_plan"} or {"mode": "chat"}""",
+            input=[{"type": "text", "text": f"Waiting for the number of people and recipes: {'yes' if awaiting_details else 'no'}\n\n{message_text}"}],
+        )
+        mode = parse_json(json_route.output_text).get("mode")
+    except (ValueError, AttributeError):
+        mode = None
+    if mode in ("meal_plan", "chat"):
+        return mode
+    return "meal_plan" if awaiting_details else "chat"
+
+
+def general_chat(text_from_input, history):
+    conversation = "\n".join(f"{m['role']}: {content_text(m.get('content'))}" for m in (history or [])[-20:] if content_text(m.get("content")))
+    interaction = client.interactions.create(
+        model=default_model,
+        system_instruction="""You are the friendly assistant of a meal-planning chatbot whose goal is to reduce household food waste. Your reply is shown directly to the user in a chat window that renders markdown.
+
+The input is the conversation so far, oldest first, as "role: content" lines, followed by the user's newest message. Earlier assistant messages may contain meal plans with recipes and a shopping list.
+
+Answer questions about cooking, food, nutrition, storage, leftovers and reducing food waste, and about the recipes and meal plans earlier in the chat, for example how long to cook a dish or what an ingredient can be replaced with. When the user wants to change a recipe that was already given, for example making it vegetarian, replacing an ingredient or cooking it for more people, rewrite that recipe in the same format as before, keep its title, and respect every diet or allergy the user has mentioned in the chat.
+
+You do not create new meal plans yourself. If the user seems to want new recipes, tell them they can ask for a meal plan, for example by saying what they want to eat, how many people are eating and how many recipes they want.
+
+If the user asks about something that is not about food, answer briefly and politely and steer the conversation back to food and meal planning.
+
+Write in the same language as the user's newest message, and keep the reply short unless the user asks for a recipe.""",
+        input=[{"type": "text", "text": f"Conversation so far:\n{conversation}\n\nUser's newest message: {text_from_input}"}],
+        stream=True
+    )
+    yield from stream_text(interaction)
+
+
+def chat(inputs, history, request: gr.Request):
+
+    text_from_input = inputs.get('text')
+    if text_from_input is None:
+        yield "This is a recipe food assistant chatbot"
+        return
+    if text_from_input.strip() == "":
+        yield "This is a recipe food assistant chatbot"
+        return
+
+    session = request.session_hash if request else None
+    awaiting_details = chats[session] == "awaiting_details"
+
+    message = [{"role": "user", "content": text_from_input}] + (history or [])
+
+    message_text = "\n".join(f"{m['role']}: {content_text(m.get('content'))}" for m in message if content_text(m.get("content")))
+
+    if route_message(message_text, awaiting_details) == "meal_plan":
+        yield from meal_plan_pipeline(text_from_input, history, message_text, session)
+    else:
+        chats[session] = None
+        yield from general_chat(text_from_input, history)
+
+
+start_message = "Hi, I will help you plan your recipies and minimize the food waste. Tell me what kind of recipies you want, how many you are, how many recipies in total and if there is something you want to use from home and how much you have. You can also ask me cooking questions or ask me to change a recipe I have given you."
+demo  = gr.ChatInterface(fn=chat, multimodal=True, fill_height=True, chatbot=gr.Chatbot(value=[{"role":"assistant", "content":start_message}], height="80vh"))
 
 theme = gr.themes.Soft(primary_hue="orange", secondary_hue="blue", neutral_hue="slate")
 demo.launch(theme=theme)
