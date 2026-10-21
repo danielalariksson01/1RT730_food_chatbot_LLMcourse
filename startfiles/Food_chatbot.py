@@ -5,6 +5,7 @@ import json
 import psycopg2
 from pgvector.psycopg2 import register_vector
 import numpy as np
+import os
 
 client = genai.Client()
 default_model = "gemini-3.8-flash"
@@ -13,6 +14,12 @@ if "demo" in locals() and demo.is_running:
     demo.close()
 
 chats = defaultdict(lambda: None)
+
+def get_conn():
+    url = os.environ.get("DATABASE_URL")
+    if url:
+        return psycopg2.connect(url)
+    return psycopg2.connect(dbname="recipes", user="food", password="food", host="db")
 
 def embed(text):
     result = client.models.embed_content(
@@ -89,12 +96,7 @@ def meal_plan_pipeline(text_from_input, history, message_text, session):
     chats[session] = None
 
     if text_from_input:
-        conn = psycopg2.connect(
-                    dbname="recipes",
-                    user="food",
-                    password="food",
-                    host="db"
-                )
+        conn = get_conn()
         try:
             register_vector(conn)
             cur = conn.cursor()
@@ -346,4 +348,4 @@ start_message = "Hi, I will help you plan your recipies and minimize the food wa
 demo  = gr.ChatInterface(fn=chat, multimodal=True, fill_height=True, chatbot=gr.Chatbot(value=[{"role":"assistant", "content":start_message}], height="80vh"))
 
 theme = gr.themes.Soft(primary_hue="orange", secondary_hue="blue", neutral_hue="slate")
-demo.launch(theme=theme)
+demo.launch(theme=theme, server_name="0.0.0.0", server_port=int(os.environ.get("PORT", 7860)))
